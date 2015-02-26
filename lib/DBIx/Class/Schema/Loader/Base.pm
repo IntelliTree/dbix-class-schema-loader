@@ -62,6 +62,7 @@ __PACKAGE__->mk_group_ro_accessors('simple', qw/
                                 only_autoclean
                                 overwrite_modifications
                                 dry_run
+                                eager_cleanup_temp
                                 generated_classes
                                 omit_version
                                 omit_timestamp
@@ -1156,12 +1157,7 @@ sub new {
     croak "dry_run can only be used with static schema generation"
         if $self->dynamic and $self->dry_run;
 
-    $self->{temp_directory} ||= File::Temp::tempdir( 'dbicXXXX',
-                                                     TMPDIR  => 1,
-                                                     CLEANUP => 1,
-                                                   );
-
-    $self->{dump_directory} ||= $self->{temp_directory};
+    $self->{dump_directory} ||= $self->_temp_directory;
 
     $self->real_dump_directory($self->{dump_directory});
 
@@ -1285,6 +1281,25 @@ sub new {
     }
 
     return $self;
+}
+
+# Traditional behavior is to leave temp dir until program exit.
+# We keep that behavior, unless "eager_cleanup_temp" is specified,
+# in which case we use File::Temp->newdir to wipe the temp dir as soon
+# as they are no longer needed or if this loader goes out of scope.
+sub _temp_directory {
+    my $self= shift;
+    if ($self->eager_cleanup_temp) {
+        # Cast to string, to prevent confusing existing code
+        return '' . ($self->{_temp_directory} ||= File::Temp->newdir('dbicXXXX'));
+    }
+    else {
+        return $self->{_temp_directory} ||=
+            File::Temp::tempdir( 'dbicXXXX',
+                                 TMPDIR => 1,
+                                 CLEANUP => 1
+                               );
+    }
 }
 
 sub _check_back_compat {
@@ -1768,7 +1783,7 @@ sub _load_tables {
     if(!$self->skip_relationships) {
         # The relationship loader needs a working schema
         local $self->{quiet} = 1;
-        local $self->{dump_directory} = $self->{temp_directory};
+        local $self->{dump_directory} = $self->_temp_directory;
         local $self->{generated_classes} = [];
         local $self->{dry_run} = 0;
         $self->_reload_classes(\@tables);
